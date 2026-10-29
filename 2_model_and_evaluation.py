@@ -300,6 +300,14 @@ def evaluate_symbol(sym_name):
         "LSTM Strategy": lstm_eq
     }
 
+    # Lưu dự báo từng phiên kiểm tra để ứng dụng (app.py) hiển thị tín hiệu thật của mô hình
+    pd.DataFrame({
+        "Date": test_df.index, "Close": test_df["Close"].values, "Target": y_test,
+        "ARIMA_pred": arima_preds,
+        "XGB_prob": xgb_probs, "XGB_pred": xgb_preds,
+        "LSTM_prob": lstm_probs, "LSTM_pred": lstm_preds,
+    }).to_csv(os.path.join(OS_DIR, f"du_bao_{sym_name}.csv"), index=False)
+
     raw_preds = {
         "y_true": y_test,
         "lstm_preds": lstm_preds,

@@ -29,7 +29,6 @@ st.sidebar.header("⚙️ Cấu hình Hệ thống")
 selected_symbol = st.sidebar.selectbox("Chọn Mã Cổ Phiếu:", SYMBOLS, index=0)
 
 selected_model = st.sidebar.radio("Chọn Mô hình Dự báo Primary:", ["PyTorch LSTM", "XGBoost Classifier", "ARIMA"])
-capital = st.sidebar.number_input("Vốn đầu tư ban đầu (VND):", value=100000000, step=10000000)
 
 st.sidebar.markdown("---")
 st.sidebar.info(
@@ -55,7 +54,7 @@ if os.path.exists(csv_file):
     st.subheader(f"📊 Phân hệ 1: Trực quan hóa Dữ liệu & Chỉ báo Kỹ thuật — {selected_symbol}")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Giá đóng cửa mới nhất", f"{latest_close:,.0f} VND", f"{price_change:+.2f}%")
+    col1.metric("Giá đóng cửa mới nhất (nghìn đồng)", f"{latest_close:,.2f}", f"{price_change:+.2f}%")
     col2.metric("Chỉ số RSI (14)", f"{latest_row['RSI_14_norm'] * 100:.1f}")
     col3.metric("Biến động ATR (14)", f"{latest_row['ATR_14_rel'] * 100:.2f}%")
     col4.metric("Khối lượng (Volume)", f"{latest_row['Volume']:,.0f}")
@@ -72,7 +71,7 @@ if os.path.exists(csv_file):
     ))
     fig.update_layout(
         title=f"Biểu đồ Giá Nến Nhật {selected_symbol} (150 phiên gần nhất)",
-        yaxis_title="Giá (VND)",
+        yaxis_title="Giá (nghìn đồng)",
         xaxis_rangeslider_visible=False,
         height=450,
         margin=dict(l=20, r=20, t=40, b=20)
@@ -88,9 +87,20 @@ if os.path.exists(csv_file):
 
     col_sig1, col_sig2, col_sig3 = st.columns([2, 2, 3])
 
-    # Xác suất dự báo từ chỉ báo kỹ thuật thực tế của phiên mới nhất
-    prob_up = float(latest_row['RSI_14_norm'] * 0.4 + (1 if latest_row['Return_1D'] > 0 else 0) * 0.6)
-    prob_up = min(max(prob_up, 0.35), 0.85)
+    # Tín hiệu lấy từ dự báo thật của mô hình (file du_bao_<mã>.csv do 2_model_and_evaluation.py tạo ra)
+    pred_file = os.path.join(RESULTS_DIR, f"du_bao_{selected_symbol}.csv")
+    if not os.path.exists(pred_file):
+        st.error(f"Chưa có file {pred_file}. Hãy chạy 2_model_and_evaluation.py trước.")
+        st.stop()
+    pred_last = pd.read_csv(pred_file, parse_dates=["Date"]).iloc[-1]
+    if selected_model == "PyTorch LSTM":
+        prob_up = float(pred_last["LSTM_prob"])
+    elif selected_model == "XGBoost Classifier":
+        prob_up = float(pred_last["XGB_prob"])
+    else:  # ARIMA chỉ cho nhãn, không có xác suất
+        prob_up = float(pred_last["ARIMA_pred"])
+    st.caption(f"Dự báo của mô hình cho phiên kế tiếp sau ngày {pred_last['Date']:%d/%m/%Y}. "
+               "Kết quả chỉ mang tính tham khảo, không phải khuyến nghị đầu tư.")
 
     with col_sig1:
         if prob_up >= 0.5:
@@ -101,16 +111,20 @@ if os.path.exists(csv_file):
             st.caption("Khuyến nghị: Nắm giữ tiền mặt hoặc Cắt lỗ phòng ngừa rủi ro.")
 
     with col_sig2:
-        st.metric("Mức độ Tự tin (Confidence Score)", f"{prob_up * 100:.1f}%")
-        st.progress(prob_up)
+        if selected_model == "ARIMA":
+            st.metric("Dự báo ARIMA", "Tăng" if prob_up >= 0.5 else "Không tăng")
+            st.caption("ARIMA dự báo giá nên chỉ cho nhãn, không có xác suất.")
+        else:
+            st.metric("Xác suất tăng (mức độ tự tin)", f"{prob_up * 100:.1f}%")
+            st.progress(prob_up)
 
     with col_sig3:
         stop_loss = latest_close * (1 - 2 * latest_row['ATR_14_rel'])
         target_price = latest_close * (1 + 3 * latest_row['ATR_14_rel'])
         st.write(
-            f"**Mức giá Cắt lỗ gợi ý (Stop-loss):** `{stop_loss:,.0f} VND` (-{(1 - stop_loss / latest_close) * 100:.1f}%)")
+            f"**Mức giá Cắt lỗ gợi ý (Stop-loss):** `{stop_loss:,.2f}` nghìn đồng (-{(1 - stop_loss / latest_close) * 100:.1f}%)")
         st.write(
-            f"**Mức giá Chốt lời mục tiêu (Take-profit):** `{target_price:,.0f} VND` (+{(target_price / latest_close - 1) * 100:.1f}%)")
+            f"**Mức giá Chốt lời mục tiêu (Take-profit):** `{target_price:,.2f}` nghìn đồng (+{(target_price / latest_close - 1) * 100:.1f}%)")
 
     st.markdown("---")
 
