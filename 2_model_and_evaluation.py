@@ -310,6 +310,7 @@ def evaluate_symbol(sym_name):
 
     raw_preds = {
         "y_true": y_test,
+        "arima_preds": arima_preds,
         "lstm_preds": lstm_preds,
         "xgb_preds": xgb_preds
     }
@@ -343,7 +344,7 @@ if __name__ == "__main__":
     print("\n=================== BẢNG 4.2: CHỈ SỐ BACKTESTING TÀI CHÍNH (HOSE T+2) ===================")
     print(df_bt_all.to_string(index=False))
 
-    # 1. Biểu đồ Accuracy So sánh 3 Mô hình
+    # 1. Biểu đồ Accuracy So sánh 3 Mô hình (Hình 4.1)
     plt.figure(figsize=(10, 5))
     x = np.arange(len(df_ml_all["Symbol"]))
     width = 0.2
@@ -360,23 +361,67 @@ if __name__ == "__main__":
     plt.savefig(os.path.join(OS_DIR, "fig_4_1_accuracy_comparison.png"), dpi=300)
     plt.close()
 
-    # 2. Biểu đồ Equity Curve cho FPT
+    # 2. Biểu đồ Equity Curve + Đường dự báo tương lai cho FPT (Hình 4.2)
     if "FPT" in equity_dict:
         eq = equity_dict["FPT"]
-        plt.figure(figsize=(10, 5))
-        plt.plot(eq["Dates"], eq["Buy & Hold"], label="Buy & Hold", color="black", linestyle="--")
-        plt.plot(eq["Dates"], eq["ARIMA Strategy"], label="ARIMA Strategy", color="blue")
-        plt.plot(eq["Dates"], eq["XGBoost Strategy"], label="XGBoost Strategy", color="orange")
-        plt.plot(eq["Dates"], eq["LSTM Strategy"], label="LSTM Strategy", color="green")
-        plt.title("Hình 4.2: Đường cong tài sản tích lũy (Equity Curve T+2) - FPT")
+        dates_hist = eq["Dates"]
+        bnh_hist = eq["Buy & Hold"]
+        arima_hist = eq["ARIMA Strategy"]
+        xgb_hist = eq["XGBoost Strategy"]
+        lstm_hist = eq["LSTM Strategy"]
+
+        # Dự báo tương lai N_FUTURE phiên (không dùng số ngẫu nhiên):
+        # - Giá trung tâm: ARIMA(1,1,1) trên 100 giá đóng cửa gần nhất, dự báo N bước.
+        # - Dải tin cậy 95%: giá trung tâm ± 1,96 × ATR14 × căn bậc hai của k.
+        # - Chiến lược có tín hiệu MUA ở phiên cuối thì tài sản đi theo giá dự báo;
+        #   tín hiệu KHÔNG MUA thì giữ tiền mặt (đi ngang).
+        N_FUTURE = 20
+        df_fpt = pd.read_csv("FPT.VN_processed.csv", index_col=0, parse_dates=True)
+        closes_fpt = df_fpt["Close"].values
+        last_close = closes_fpt[-1]
+        atr_abs = df_fpt["ATR_14_rel"].iloc[-1] * last_close
+        center = np.asarray(ARIMA(closes_fpt[-100:], order=(1, 1, 1)).fit().forecast(steps=N_FUTURE))
+        k = np.arange(1, N_FUTURE + 1)
+        lower, upper = center - 1.96 * atr_abs * np.sqrt(k), center + 1.96 * atr_abs * np.sqrt(k)
+        future_dates = list(pd.bdate_range(dates_hist[-1] + pd.Timedelta(days=1), periods=N_FUTURE))
+        dates_proj = [dates_hist[-1]] + future_dates
+
+        last_sig = {"Buy & Hold": 1,
+                    "ARIMA Strategy": int(raw_preds_dict["FPT"]["arima_preds"][-1]),
+                    "XGBoost Strategy": int(raw_preds_dict["FPT"]["xgb_preds"][-1]),
+                    "LSTM Strategy": int(raw_preds_dict["FPT"]["lstm_preds"][-1])}
+        styles = {"Buy & Hold": ("black", "Mua và nắm giữ"), "ARIMA Strategy": ("blue", "ARIMA"),
+                  "XGBoost Strategy": ("orange", "XGBoost"), "LSTM Strategy": ("green", "LSTM")}
+
+        plt.figure(figsize=(11, 5.5))
+        for key, (color, name) in styles.items():
+            hist = eq[key]
+            e_last = hist.iloc[-1]
+            # Đường dữ liệu kiểm thử quá khứ (nét liền)
+            plt.plot(dates_hist, hist, color=color, linewidth=1.5, label=f"{name} (quá khứ)")
+            # Đường dự báo tương lai (nét đứt) + dải tin cậy 95%
+            if last_sig[key] == 1:
+                fut = e_last * center / last_close
+                plt.fill_between(future_dates, e_last * lower / last_close, e_last * upper / last_close,
+                                 color=color, alpha=0.10)
+            else:
+                fut = np.full(N_FUTURE, e_last)
+            plt.plot(dates_proj, [e_last] + list(fut), color=color, linestyle="--", linewidth=2,
+                     label=f"{name} (dự báo – {'mua' if last_sig[key] == 1 else 'giữ tiền'})")
+
+        # Phủ màu vùng tương lai
+        plt.axvspan(dates_hist[-1], future_dates[-1], color="orange", alpha=0.12, label="Vùng dự báo tương lai")
+
+        plt.title("Hình 4.2: Đường cong tài sản tích lũy (T+2) và dự báo 20 phiên tới (dải tin cậy 95%) - FPT")
         plt.ylabel("Giá trị danh mục (Gốc = 1.0)")
-        plt.legend()
+        plt.xlabel("Thời gian")
+        plt.legend(loc="best", fontsize=8)
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(os.path.join(OS_DIR, "fig_4_2_equity_curve_fpt.png"), dpi=300)
         plt.close()
 
-    # 3. Ma trận nhầm lẫn Confusion Matrix cho FPT
+    # 3. Ma trận nhầm lẫn Confusion Matrix cho FPT (Hình 4.3)
     if "FPT" in raw_preds_dict:
         cm = confusion_matrix(raw_preds_dict["FPT"]["y_true"], raw_preds_dict["FPT"]["lstm_preds"])
         plt.figure(figsize=(6, 5))
